@@ -1,0 +1,11 @@
+[project]
+name = "Recommender_Systems"
+version = "0.1.0"
+description = "Repository for the "Sistemas de Recomendación" course in the MSc in Machine Learning and Big Data at Universidad Politécnica de Madrid."
+readme = "LEEME.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.4.3",
+    "polars>=1.39.0",
+    "scipy>=1.17.1",
+]
