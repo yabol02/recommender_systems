@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import csv
+import os
+from typing import Any
+
 import numpy as np
 
 
@@ -28,3 +32,19 @@ def save_predictions(predictions: np.ndarray, output_file: str) -> None:
         comments="",
         fmt=["%d", "%.4f"],
     )
+
+
+def save_cv_results(results: list[dict[str, Any]], path: str) -> None:
+    """Save result rows to a CSV file from the Cross Validation results.
+
+    :param results: List of result dicts.
+    :param path: Output file path.
+    """
+    if not results:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(results[0].keys()))
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"Results saved to {path}")
