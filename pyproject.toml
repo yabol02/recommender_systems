@@ -6,6 +6,7 @@ readme = "LEEME.md"
 requires-python = ">=3.13"
 dependencies = [
     "duckdb>=1.5.0",
+    "hdbscan>=0.8.41",
     "ipykernel>=7.2.0",
     "matplotlib>=3.10.8",
     "numpy>=2.4.3",
