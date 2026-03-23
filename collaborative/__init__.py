@@ -1,4 +1,5 @@
-from .algorithm import (
+from .cold_start import COLD_START_REGISTRY, ColdStartStatus
+from .knn import (
     diagnose_cold_start,
     precompute_neighbours,
     predict_from_records,
