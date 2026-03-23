@@ -1,15 +1,32 @@
 from __future__ import annotations
 
+import argparse
 import os
 
 import numpy as np
 
 from collaborative import diagnose_cold_start, print_cold_start_report
-from collaborative.cold_start import MeanFallback
+from collaborative.cold_start import MeanFallback, MedianFallback, ModeFallback
 from collaborative.pmf import PMF, PMF_CONFIGS, SVDPP_CONFIGS, PMFConfig, SVDPlusPlus
 from i_o import load_data, save_predictions
 
 if __name__ == "__main__":
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="PMF/SVD++ recommendation model training and evaluation")
+    parser.add_argument(
+        "--output_suffix",
+        type=str,
+        default="",
+        help="Optional suffix to append to the output filename (e.g., 'test', 'v2')"
+    )
+    parser.add_argument(
+        "--discrete",
+        action="store_true",
+        default=False,
+        help="Round predictions to integers before saving"
+    )
+    args = parser.parse_args()
+    
     os.makedirs("./preds", exist_ok=True)
 
     DATA_DIR = "./data/collaborative_filtering"
@@ -23,7 +40,7 @@ if __name__ == "__main__":
     #   SVD++ presets -> "default" | "deep" | "sgd"
     # ------------------------------------------------------------------ #
     MODEL = PMF  # <- PMF | SVDPlusPlus
-    PRESET = "pure_pmf"  # <- Previous preset name or None
+    PRESET = "sgd"  # <- Previous preset name or None
 
     registry = SVDPP_CONFIGS if MODEL is SVDPlusPlus else PMF_CONFIGS
 
@@ -52,7 +69,9 @@ if __name__ == "__main__":
         if PRESET is not None
         else f"K{cfg.n_factors}_lr{cfg.lr}_reg{cfg.reg_user}"
     )
-    OUTPUT_FILE = f"./preds/{algo_name}_{config_tag}.csv"
+    # Add optional suffix to output filename
+    suffix_str = f"_{args.output_suffix}" if args.output_suffix else ""
+    OUTPUT_FILE = f"./preds/{algo_name}_{config_tag}{suffix_str}.csv"
 
     train, test = load_data(DATA_DIR)
 
@@ -66,11 +85,16 @@ if __name__ == "__main__":
     cold_map, summary = diagnose_cold_start(train, test)
     print_cold_start_report(summary)
 
-    cold_start_handler = MeanFallback()
+    cold_start_handler = ModeFallback()
     cold_start_handler.setup(train)
 
     model = MODEL(cfg)
     model.fit(train)
     results = model.predict_test(test, cold_start_handler=cold_start_handler)
+    
+    # Round predictions to integers if discrete flag is set
+    if args.discrete:
+        results[:, 1] = np.round(results[:, 1]).astype(int)
+    
     save_predictions(results, OUTPUT_FILE)
     print(f"Done - predictions saved to {OUTPUT_FILE}")

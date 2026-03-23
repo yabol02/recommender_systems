@@ -93,7 +93,111 @@ class MeanFallback(ColdStartHandler):
         return self._global_mean
 
 
+class MedianFallback(ColdStartHandler):
+    """Context-aware median fallback.
+
+    Applies the most informative available median for each cold-start case:
+    * `COLD_USER` - Item median - we know how others rated this item
+    * `UNKNOWN_ITEM` - User median - we know how this user rates things
+    * `BOTH` - Global median - only global info available
+
+    More robust to outliers than mean.
+
+    :param global_median_init: Default global median before `setup` is called (used as an emergency fallback).
+    """
+
+    def __init__(self, global_median_init: float = 5.0) -> None:
+        self._global_median: float = global_median_init
+        self._item_medians: dict[int, float] = {}
+        self._user_medians: dict[int, float] = {}
+
+    def setup(self, train_data: np.ndarray) -> None:
+        uids = train_data[:, 0].astype(int)
+        iids = train_data[:, 1].astype(int)
+        ratings = train_data[:, 2].astype(np.float64)
+
+        self._global_median = float(np.median(ratings))
+
+        # User medians
+        u_unique = np.unique(uids)
+        self._user_medians = {}
+        for u in u_unique:
+            mask = uids == u
+            self._user_medians[int(u)] = float(np.median(ratings[mask]))
+
+        # Item medians
+        i_unique = np.unique(iids)
+        self._item_medians = {}
+        for i in i_unique:
+            mask = iids == i
+            self._item_medians[int(i)] = float(np.median(ratings[mask]))
+
+    def predict(self, uid: int, iid: int, status: ColdStartStatus) -> float:
+        if status == ColdStartStatus.COLD_USER:
+            return self._item_medians.get(iid, self._global_median)
+        if status == ColdStartStatus.UNKNOWN_ITEM:
+            return self._user_medians.get(uid, self._global_median)
+        # BOTH - neither user nor item is known
+        return self._global_median
+
+
+class ModeFallback(ColdStartHandler):
+    """Context-aware mode (most frequent value) fallback.
+
+    Applies the most informative available mode for each cold-start case:
+    * `COLD_USER` - Item mode - most common rating for this item
+    * `UNKNOWN_ITEM` - User mode - most common rating by this user
+    * `BOTH` - Global mode - most common rating overall
+
+    Useful when dealing with discrete rating scales (e.g., 1-5 stars).
+
+    :param global_mode_init: Default global mode before `setup` is called (used as an emergency fallback).
+    """
+
+    def __init__(self, global_mode_init: float = 5.0) -> None:
+        self._global_mode: float = global_mode_init
+        self._item_modes: dict[int, float] = {}
+        self._user_modes: dict[int, float] = {}
+
+    def setup(self, train_data: np.ndarray) -> None:
+        uids = train_data[:, 0].astype(int)
+        iids = train_data[:, 1].astype(int)
+        ratings = train_data[:, 2].astype(int)  # Treat ratings as integers for mode
+
+        # Global mode
+        unique_ratings, counts = np.unique(ratings, return_counts=True)
+        self._global_mode = float(unique_ratings[np.argmax(counts)])
+
+        # User modes
+        u_unique = np.unique(uids)
+        self._user_modes = {}
+        for u in u_unique:
+            mask = uids == u
+            user_ratings = ratings[mask]
+            unique_vals, counts = np.unique(user_ratings, return_counts=True)
+            self._user_modes[int(u)] = float(unique_vals[np.argmax(counts)])
+
+        # Item modes
+        i_unique = np.unique(iids)
+        self._item_modes = {}
+        for i in i_unique:
+            mask = iids == i
+            item_ratings = ratings[mask]
+            unique_vals, counts = np.unique(item_ratings, return_counts=True)
+            self._item_modes[int(i)] = float(unique_vals[np.argmax(counts)])
+
+    def predict(self, uid: int, iid: int, status: ColdStartStatus) -> float:
+        if status == ColdStartStatus.COLD_USER:
+            return self._item_modes.get(iid, self._global_mode)
+        if status == ColdStartStatus.UNKNOWN_ITEM:
+            return self._user_modes.get(uid, self._global_mode)
+        # BOTH - neither user nor item is known
+        return self._global_mode
+
+
 COLD_START_REGISTRY: dict[str, type[ColdStartHandler]] = {
     "static": StaticFallback,
     "mean": MeanFallback,
+    "median": MedianFallback,
+    "mode": ModeFallback,
 }
