@@ -6,8 +6,8 @@ from .knn import (
     predict_knn,
     print_cold_start_report,
 )
-from .cold_start import COLD_START_REGISTRY, ColdStartStatus
 from .metrics import evaluate
+from .pmf import PMF, PMF_CONFIGS, SVDPP_CONFIGS, PMFConfig
 from .similarity import SIMILARITY_REGISTRY
 from .strategy import STRATEGY_REGISTRY
 
@@ -27,4 +27,9 @@ __all__ = [
     "SIMILARITY_REGISTRY",
     # strategy
     "STRATEGY_REGISTRY",
+    # pmf
+    "PMFConfig",
+    "PMF",
+    "PMF_CONFIGS",
+    "SVDPP_CONFIGS",
 ]
