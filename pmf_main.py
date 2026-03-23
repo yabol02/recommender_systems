@@ -6,7 +6,7 @@ import os
 import numpy as np
 
 from collaborative import diagnose_cold_start, print_cold_start_report
-from collaborative.cold_start import MeanFallback, MedianFallback, ModeFallback
+from collaborative.cold_start import MeanFallback, MedianFallback, ModeFallback, PopularityFallback, WeightedMeanFallback, HybridFallback, PercentileFallback, TrimmedMeanFallback, MedianDampingFallback, IQROutlierFallback
 from collaborative.pmf import PMF, PMF_CONFIGS, SVDPP_CONFIGS, PMFConfig, SVDPlusPlus
 from i_o import load_data, save_predictions
 
@@ -85,7 +85,7 @@ if __name__ == "__main__":
     cold_map, summary = diagnose_cold_start(train, test)
     print_cold_start_report(summary)
 
-    cold_start_handler = ModeFallback()
+    cold_start_handler = MedianDampingFallback(damping_factor=2.0)
     cold_start_handler.setup(train)
 
     model = MODEL(cfg)
