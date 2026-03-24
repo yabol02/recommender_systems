@@ -207,3 +207,7 @@ cython_debug/
 # __marimo__/
 
 preds/*
+
+# Own
+
+/data/cut*
