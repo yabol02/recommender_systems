@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from enum import Enum, auto
 
 import numpy as np
+import pandas as pd
 
 
 class ColdStartStatus(Enum):
@@ -487,10 +488,10 @@ class MedianDampingFallback(ColdStartHandler):
     Best for balancing robustness and data efficiency.
 
     :param global_median_init: Default global median before `setup` (default: 5.5).
-    :param damping_factor: Shrinkage strength (higher = more conservative). Default 3.0.
+    :param damping_factor: Shrinkage strength (higher = more conservative). Default 1.0.
     """
 
-    def __init__(self, global_median_init: float = 5.5, damping_factor: float = 3.0) -> None:
+    def __init__(self, global_median_init: float = 5.5, damping_factor: float = 1.0) -> None:
         self._global_median: float = global_median_init
         self._item_medians: dict[int, float] = {}
         self._user_medians: dict[int, float] = {}
@@ -499,27 +500,26 @@ class MedianDampingFallback(ColdStartHandler):
         self._damping_factor = damping_factor
 
     def setup(self, train_data: np.ndarray) -> None:
-        uids = train_data[:, 0].astype(int)
-        iids = train_data[:, 1].astype(int)
-        ratings = train_data[:, 2].astype(np.float64)
+        import pandas as pd
 
-        self._global_median = float(np.median(ratings))
+        # 1. Convertimos a DataFrame para aprovechar la velocidad de Pandas
+        df = pd.DataFrame(train_data, columns=['uid', 'iid', 'rating'])
+        df['uid'] = df['uid'].astype(int)
+        df['iid'] = df['iid'].astype(int)
+        df['rating'] = df['rating'].astype(float)
 
-        # User medians and counts
-        u_unique = np.unique(uids)
-        for u in u_unique:
-            mask = uids == u
-            user_ratings = ratings[mask]
-            self._user_medians[int(u)] = float(np.median(user_ratings))
-            self._user_counts[int(u)] = int(mask.sum())
+        # 2. Calculamos la mediana global
+        self._global_median = float(df['rating'].median())
 
-        # Item medians and counts
-        i_unique = np.unique(iids)
-        for i in i_unique:
-            mask = iids == i
-            item_ratings = ratings[mask]
-            self._item_medians[int(i)] = float(np.median(item_ratings))
-            self._item_counts[int(i)] = int(mask.sum())
+        # 3. Optimizamos usuarios: agrupamos, calculamos mediana y conteo en C
+        user_stats = df.groupby('uid')['rating'].agg(['median', 'count'])
+        self._user_medians = user_stats['median'].to_dict()
+        self._user_counts = user_stats['count'].astype(int).to_dict()
+
+        # 4. Optimizamos ítems: idéntica operación vectorizada
+        item_stats = df.groupby('iid')['rating'].agg(['median', 'count'])
+        self._item_medians = item_stats['median'].to_dict()
+        self._item_counts = item_stats['count'].astype(int).to_dict()
 
     def _dampen(self, median: float, count: int, global_median: float) -> float:
         """Apply damping: shrink toward global median for low-count cases."""
@@ -609,6 +609,157 @@ class IQROutlierFallback(ColdStartHandler):
             return self._user_medians.get(uid, self._global_median)
         return self._global_median
 
+class MedianDampingSingletonFallback(ColdStartHandler):
+    """Median with damping/confidence weighting and specific 'BOTH' handling.
+
+    Combines median's robustness with confidence-based shrinkage.
+    When fewer ratings exist, shrink toward global median for stability.
+    
+    * `COLD_USER` - Item median, dampened by item rating count
+    * `UNKNOWN_ITEM` - User median, dampened by user rating count
+    * `BOTH` - Median of interactions where BOTH user and item appeared only once.
+
+    Best for balancing robustness and data efficiency, specially with sparse new items/users.
+
+    :param global_median_init: Default global median before `setup` (default: 5.5).
+    :param damping_factor: Shrinkage strength (higher = more conservative). Default 1.0.
+    """
+
+    def __init__(self, global_median_init: float = 5.5, damping_factor: float = 1.0) -> None:
+        self._global_median: float = global_median_init
+        self._singletons_median: float = global_median_init
+        self._item_medians: dict[int, float] = {}
+        self._user_medians: dict[int, float] = {}
+        self._item_counts: dict[int, int] = {}
+        self._user_counts: dict[int, int] = {}
+        self._damping_factor = damping_factor
+
+    def setup(self, train_data: np.ndarray) -> None:
+
+        # 1. Convertimos el array de NumPy a un DataFrame para aprovechar la velocidad de C
+        df = pd.DataFrame(train_data, columns=['uid', 'iid', 'rating'])
+        df['uid'] = df['uid'].astype(int)
+        df['iid'] = df['iid'].astype(int)
+        df['rating'] = df['rating'].astype(float)
+
+        # Mediana global de todo el set
+        self._global_median = float(df['rating'].median())
+        print(f"Global median: {self._global_median:.4f}")
+        # 2. Optimizamos usuarios: agrupamos, calculamos mediana y conteo de un plumazo
+        user_stats = df.groupby('uid')['rating'].agg(['median', 'count'])
+        self._user_medians = user_stats['median'].to_dict()
+        self._user_counts = user_stats['count'].astype(int).to_dict()
+
+        # 3. Optimizamos ítems: misma operación vectorizada
+        item_stats = df.groupby('iid')['rating'].agg(['median', 'count'])
+        self._item_medians = item_stats['median'].to_dict()
+        self._item_counts = item_stats['count'].astype(int).to_dict()
+
+        # 4. Búsqueda ultra-rápida de Singletons (casos donde user_count == 1 Y item_count == 1)
+        # Mapeamos los conteos precalculados de vuelta al DataFrame
+        singleton_mask = (df['uid'].map(user_stats['count']) == 1) & \
+                         (df['iid'].map(item_stats['count']) == 1)
+        
+        singleton_ratings = df.loc[singleton_mask, 'rating']
+        print(f"Found {len(singleton_ratings)} singleton interactions.")
+        print(f"Singleton ratings summary:\n{singleton_ratings.describe()}")
+        # Si existen singletons, guardamos su mediana. Si no, usamos la global por seguridad.
+        if not singleton_ratings.empty:
+            self._singletons_median = float(singleton_ratings.median())
+            print(f"Singletons median: {self._singletons_median:.4f}")
+            
+        else:
+            self._singletons_median = self._global_median
+
+    def _dampen(self, median: float, count: int, global_median: float) -> float:
+        """Apply damping: shrink toward global median for low-count cases."""
+        weight = count / (count + self._damping_factor)
+        return weight * median + (1 - weight) * global_median
+
+    def predict(self, uid: int, iid: int, status: ColdStartStatus) -> float:
+        if status == ColdStartStatus.COLD_USER:
+            item_median = self._item_medians.get(iid, self._global_median)
+            count = self._item_counts.get(iid, 0)
+            return self._dampen(item_median, count, self._global_median)
+        
+        if status == ColdStartStatus.UNKNOWN_ITEM:
+            user_median = self._user_medians.get(uid, self._global_median)
+            count = self._user_counts.get(uid, 0)
+            return self._dampen(user_median, count, self._global_median)
+        
+        # Caso BOTH: devolvemos la mediana específica de los singletons
+        return self._singletons_median
+
+class AsymmetricMedianDampingFallback(ColdStartHandler):
+    """Median with asymmetric damping/confidence weighting.
+
+    Uses different shrinkage strengths for users and items because their 
+    statistical confidence evolves at different rates.
+    
+    * `COLD_USER` - Item median, dampened by item rating count (using item_damping_factor)
+    * `UNKNOWN_ITEM` - User median, dampened by user rating count (using user_damping_factor)
+    * `BOTH` - Global median
+
+    :param global_median_init: Default global median before `setup` (default: 5.5).
+    :param user_damping_factor: Shrinkage strength for users. Default 1.0.
+    :param item_damping_factor: Shrinkage strength for items. Default 5.0.
+    """
+
+    def __init__(
+        self, 
+        global_median_init: float = 5.5, 
+        user_damping_factor: float = 1.0,
+        item_damping_factor: float = 5.0
+    ) -> None:
+        self._global_median: float = global_median_init
+        self._item_medians: dict[int, float] = {}
+        self._user_medians: dict[int, float] = {}
+        self._item_counts: dict[int, int] = {}
+        self._user_counts: dict[int, int] = {}
+        
+        # Separamos el factor de amortiguación
+        self._user_damping_factor = user_damping_factor
+        self._item_damping_factor = item_damping_factor
+
+    def setup(self, train_data: np.ndarray) -> None:
+        import pandas as pd
+
+        df = pd.DataFrame(train_data, columns=['uid', 'iid', 'rating'])
+        df['uid'] = df['uid'].astype(int)
+        df['iid'] = df['iid'].astype(int)
+        df['rating'] = df['rating'].astype(float)
+
+        self._global_median = float(df['rating'].median())
+
+        # Stats de usuarios
+        user_stats = df.groupby('uid')['rating'].agg(['median', 'count'])
+        self._user_medians = user_stats['median'].to_dict()
+        self._user_counts = user_stats['count'].astype(int).to_dict()
+
+        # Stats de ítems
+        item_stats = df.groupby('iid')['rating'].agg(['median', 'count'])
+        self._item_medians = item_stats['median'].to_dict()
+        self._item_counts = item_stats['count'].astype(int).to_dict()
+
+    def _dampen(self, median: float, count: int, global_median: float, damping_factor: float) -> float:
+        """Apply damping using the specific factor for user or item."""
+        weight = count / (count + damping_factor)
+        return weight * median + (1 - weight) * global_median
+
+    def predict(self, uid: int, iid: int, status: ColdStartStatus) -> float:
+        if status == ColdStartStatus.COLD_USER:
+            # Para usuarios fríos, usamos la info del ítem con el damping del ítem
+            item_median = self._item_medians.get(iid, self._global_median)
+            count = self._item_counts.get(iid, 0)
+            return self._dampen(item_median, count, self._global_median, self._item_damping_factor)
+        
+        if status == ColdStartStatus.UNKNOWN_ITEM:
+            # Para ítems desconocidos, usamos la info del usuario con el damping del usuario
+            user_median = self._user_medians.get(uid, self._global_median)
+            count = self._user_counts.get(uid, 0)
+            return self._dampen(user_median, count, self._global_median, self._user_damping_factor)
+        
+        return self._global_median
 
 COLD_START_REGISTRY: dict[str, type[ColdStartHandler]] = {
     "static": StaticFallback,
@@ -622,4 +773,5 @@ COLD_START_REGISTRY: dict[str, type[ColdStartHandler]] = {
     "trimmed_mean": TrimmedMeanFallback,
     "median_damping": MedianDampingFallback,
     "iqr_outlier": IQROutlierFallback,
+    "median_damping_singletons": MedianDampingSingletonFallback,
 }

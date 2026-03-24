@@ -5,7 +5,7 @@ import numpy as np
 import joblib
 
 from collaborative import diagnose_cold_start, print_cold_start_report, ColdStartStatus
-from collaborative.cold_start import MedianDampingFallback
+from collaborative.cold_start import MedianDampingFallback, MedianDampingSingletonFallback, AsymmetricMedianDampingFallback
 from i_o import load_data, save_predictions
 
 from surprise import SVD, Prediction
@@ -62,7 +62,10 @@ if __name__ == "__main__":
     print_cold_start_report(summary)
 
     # Create and setup cold start handler (similar to pmf_main.py)
-    cold_start_handler = MedianDampingFallback(damping_factor=2.0)
+    cold_start_handler = AsymmetricMedianDampingFallback(
+        user_damping_factor=0.5,
+        item_damping_factor=11.0
+    )
     cold_start_handler.setup(train_data)
 
     # Load pre-trained models
