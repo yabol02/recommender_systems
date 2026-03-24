@@ -8,11 +8,43 @@ from collaborative import diagnose_cold_start, print_cold_start_report, ColdStar
 from collaborative.cold_start import MedianDampingFallback
 from i_o import load_data, save_predictions
 
+from surprise import SVD, Prediction
+
 from surprise import Reader, Dataset
+class SurpriseEnsemble:
+    def __init__(self, base_params_list, n_estimators):
+        self.base_params_list = base_params_list
+        self.n_estimators = n_estimators
+        self.models = []
+
+    def _create_base_model(self, idx):
+        params = self.base_params_list[idx].copy()
+
+        if "random_state" in params:
+            params["random_state"] = params["random_state"] + idx
+
+        return SVD(**params)
+    
+class VotingEnsemble(SurpriseEnsemble):
+    def fit(self, trainset):
+        self.models = [
+            self._create_base_model(i).fit(trainset)
+            for i in range(self.n_estimators)
+        ]
+        return self
+
+    def test(self, testset):
+        all_preds = [model.test(testset) for model in self.models]
+        final_preds = []
+        for i in range(len(testset)):
+            avg_est = np.mean([p[i].est for p in all_preds])
+            p = all_preds[0][i]
+            final_preds.append(Prediction(p.uid, p.iid, p.r_ui, avg_est, p.details))
+        return final_preds
 
 if __name__ == "__main__":
     os.makedirs("./preds", exist_ok=True)
-    DATA_DIR = "./data/cut_1_0"
+    DATA_DIR = "./data/collaborative_filtering"
     RESOURCES_PATH = "LAB_A_models"
 
     # Load data: train (user, item, rating), test (ID, user, item)
@@ -62,8 +94,8 @@ if __name__ == "__main__":
         
         # Determine which model to use based on cold start status
         if status == ColdStartStatus.OK:
-            pred = main_model.predict(user_id, item_id)
-            rating_pred = pred.est
+            pred = main_model.test([(user_id, item_id, 0)])
+            rating_pred = pred[0].est
         else:
             # For cold cases, use the handler directly
             rating_pred = cold_start_handler.predict(user_id, item_id, status)

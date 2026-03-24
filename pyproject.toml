@@ -18,6 +18,7 @@ dependencies = [
     "scikit-learn>=1.7.2",
     "scikit-surprise>=1.1.4",
     "seaborn>=0.13.2",
+    "torch>=2.4.1",
 ]
 
 # Specific versions of torch, torchvision, and torchaudio are installed based on the extra feature
