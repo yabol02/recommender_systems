@@ -211,3 +211,4 @@ preds/*
 # Own
 
 /data/cut*
+*.pt
